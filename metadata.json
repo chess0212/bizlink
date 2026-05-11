@@ -1,0 +1,8 @@
+{
+  "name": "BizLink CI",
+  "description": "Plateforme de digitalisation du commerce informel en Côte d'Ivoire. Transformez votre WhatsApp en boutique professionnelle avec paiements Mobile Money intégrés.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

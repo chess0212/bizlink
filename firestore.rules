@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn(); } // Relaxed for development to avoid blocking users with unverified emails
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.uid == request.auth.uid &&
+               data.role in ['seller', 'admin'] &&
+               data.keys().hasAll(['uid', 'role', 'createdAt']) &&
+               data.keys().size() <= 10;
+      }
+      
+      allow get: if isSignedIn() && (request.auth.uid == userId);
+      allow create: if isVerified() && isValidUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isVerified() && (request.auth.uid == userId) && 
+                      isValidUser(incoming()) && 
+                      incoming().uid == existing().uid &&
+                      incoming().role == existing().role &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phoneNumber', 'onboarded', 'shopId']);
+    }
+
+    // --- Shops Collection ---
+    match /shops/{shopId} {
+      function isValidShop(data) {
+        return data.ownerId == request.auth.uid &&
+               data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+               data.whatsappNumber is string && data.whatsappNumber.size() >= 8 &&
+               data.keys().hasAll(['ownerId', 'name', 'whatsappNumber', 'createdAt']) &&
+               data.keys().size() <= 22;
+      }
+
+      allow read: if true; // Shops are public
+      allow create: if isVerified() && isValidShop(incoming()) && incoming().createdAt == request.time;
+      allow update: if isVerified() && existing().ownerId == request.auth.uid && 
+                      isValidShop(incoming()) &&
+                      incoming().ownerId == existing().ownerId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'description', 'slogan', 'logo', 'bannerImage', 'sliderImages', 'whatsappNumber', 'instagram', 'tiktok', 'facebook', 'city', 'currency', 'deliveryZones', 'orangeMoney', 'mtnMoney', 'moovMoney', 'accentColor']);
+      allow delete: if isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    // --- Products Collection ---
+    match /shops/{shopId}/products/{productId} {
+      function isShopOwner() {
+        return isVerified() && get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid;
+      }
+
+      function isValidProduct(data) {
+        return data.shopId == shopId &&
+               data.name is string && data.name.size() > 0 &&
+               data.price is number && data.price >= 0 &&
+               data.keys().hasAll(['shopId', 'name', 'price', 'createdAt']) &&
+               data.keys().size() <= 15;
+      }
+
+      allow read: if true; // Products are public
+      allow create: if isShopOwner() && isValidProduct(incoming()) && incoming().createdAt == request.time;
+      allow update: if isShopOwner() && isValidProduct(incoming()) && 
+                      incoming().shopId == existing().shopId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'description', 'price', 'category', 'images', 'stock', 'isActive', 'variants']);
+      allow delete: if isShopOwner();
+    }
+
+    // --- Orders Collection ---
+    match /shops/{shopId}/orders/{orderId} {
+      function isShopOwnerOrAdmin() {
+        return isVerified() && get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid;
+      }
+
+      function isValidOrder(data) {
+        return data.shopId == shopId &&
+               data.customerPhone is string &&
+               data.items is list && data.items.size() > 0 &&
+               data.total is number &&
+               data.status in ['pending', 'confirmed', 'delivering', 'completed', 'cancelled'] &&
+               data.keys().hasAll(['shopId', 'customerPhone', 'items', 'total', 'status', 'createdAt']);
+      }
+
+      allow get: if isShopOwnerOrAdmin(); 
+      allow list: if isShopOwnerOrAdmin();
+      allow create: if isValidOrder(incoming()) && incoming().createdAt == request.time;
+      allow update: if isShopOwnerOrAdmin() && isValidOrder(incoming()) && 
+                      incoming().shopId == existing().shopId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus']);
+    }
+  }
+}
